@@ -63,11 +63,8 @@ def fazer_logout():
 def converter_imagem_para_base64(arq):
     try:
         img = Image.open(arq)
-        
-        # Converte a imagem para RGB caso ela tenha fundo transparente (RGBA ou P)
         if img.mode in ("RGBA", "P"):
             img = img.convert("RGB")
-            
         img.thumbnail((550, 550))
         buf = BytesIO()
         img.save(buf, format="JPEG", quality=80)
@@ -150,9 +147,6 @@ else:
     try: dados_banco = tabela_mov.scan()['Items'] if tabela_mov else []
     except: dados_banco = []
 
-    # ==========================================
-    # DASHBOARD
-    # ==========================================
     if pag == "📊 Dashboard de Movimentações":
         st.title("📊 Dashboard Executivo - LogixHub")
         st.divider()
@@ -160,7 +154,6 @@ else:
         else:
             df = pd.DataFrame(dados_banco)
             
-            # ALTERAÇÃO 4: Aparecer perfis pendentes de devolução
             pendentes_dash = df[df.get('status') == 'Pendente'] if 'status' in df.columns else pd.DataFrame()
             if not pendentes_dash.empty:
                 st.error("⚠️ Perfis com Devoluções Pendentes")
@@ -187,7 +180,6 @@ else:
     else:
         st.title("Painel LogixHub")
         
-        # Abas baseadas no perfil
         if st.session_state['perfil'] == 'admin':
             abas = st.tabs(["📤 Registrar Saída", "📥 Registrar Devolução", "⚙️ Gerenciamento"])
             t_saida, t_dev, t_ger = abas
@@ -201,7 +193,6 @@ else:
         with t_saida:
             st.header("Registrar Saída")
             
-            # ALTERAÇÃO 5: Admin pode registrar saída em qualquer perfil
             if st.session_state['perfil'] == 'admin':
                 usuario_alvo = st.text_input("Registrar saída em nome de qual usuário?", value=st.session_state['usuario'])
             else:
@@ -209,7 +200,15 @@ else:
 
             ts = st.selectbox("Tipo", ["Veículo", "Equipamento"], key="ts")
             
-            # ALTERAÇÃO 3: Campo de mensagem obrigatório
+            # NOVOS CAMPOS: Data e Hora manuais
+            col_d_saida, col_h_saida = st.columns(2)
+            with col_d_saida:
+                data_s_input = st.date_input("Data da Saída", format="DD/MM/YYYY")
+            with col_h_saida:
+                hora_s_input = st.time_input("Hora da Saída")
+            
+            str_data_hora_saida = f"{data_s_input.strftime('%d/%m/%Y')} {hora_s_input.strftime('%H:%M:%S')}"
+
             motivo_s = st.text_area("Descrição e motivo do uso (Obrigatório):", key="motivo_saida")
 
             met_s = st.radio("Foto", ["📸 Tirar foto", "📁 Upload"], key="ms")
@@ -231,13 +230,12 @@ else:
                     b64 = converter_imagem_para_base64(foto_s)
                     if b64:
                         try:
-                            # ALTERAÇÃO 2: Envia com status Pendente
                             tabela_mov.put_item(Item={
                                 'id': str(uuid.uuid4()), 
                                 'acao': 'Saída', 
                                 'item': ts, 
                                 'usuario': usuario_alvo, 
-                                'data_hora': datetime.now().strftime("%d/%m/%Y %H:%M:%S"), 
+                                'data_hora': str_data_hora_saida, 
                                 'imagem_base64': b64,
                                 'motivo': motivo_s,
                                 'status': 'Pendente'
@@ -255,7 +253,6 @@ else:
         with t_dev:
             st.header("Registrar Devolução")
             
-            # ALTERAÇÃO 5 e 2: Filtra pendências (Admin vê tudo, usuário vê as dele)
             if st.session_state['perfil'] == 'admin':
                 pendentes = [m for m in dados_banco if m.get('status') == 'Pendente']
             else:
@@ -267,9 +264,17 @@ else:
                 opcoes_pend = {m['id']: f"{m['item']} - Retirado por: {m['usuario']} (Saída: {m['data_hora']})" for m in pendentes}
                 item_devolver = st.selectbox("Selecione a pendência para dar baixa:", options=list(opcoes_pend.keys()), format_func=lambda x: opcoes_pend[x])
                 
-                # Puxa os dados originais do item selecionado para gravar no log de devolução
                 mov_pendente = next(m for m in pendentes if m['id'] == item_devolver)
                 td = mov_pendente['item']
+
+                # NOVOS CAMPOS: Data e Hora manuais na Devolução
+                col_d_dev, col_h_dev = st.columns(2)
+                with col_d_dev:
+                    data_d_input = st.date_input("Data da Devolução", format="DD/MM/YYYY")
+                with col_h_dev:
+                    hora_d_input = st.time_input("Hora da Devolução")
+                
+                str_data_hora_dev = f"{data_d_input.strftime('%d/%m/%Y')} {hora_d_input.strftime('%H:%M:%S')}"
 
                 met_d = st.radio("Foto", ["📸 Tirar foto", "📁 Upload"], key="md")
                 foto_d = None
@@ -288,7 +293,6 @@ else:
                         b64 = converter_imagem_para_base64(foto_d)
                         if b64:
                             try:
-                                # 1. Atualiza o status do item original de 'Pendente' para 'Devolvido'
                                 tabela_mov.update_item(
                                     Key={'id': item_devolver},
                                     UpdateExpression="SET #st = :val",
@@ -296,14 +300,13 @@ else:
                                     ExpressionAttributeValues={':val': 'Devolvido'}
                                 )
                                 
-                                # 2. Cria o log da devolução amarrado ao usuário que fez a baixa
                                 tabela_mov.put_item(Item={
                                     'id': str(uuid.uuid4()), 
                                     'acao': 'Devolução', 
                                     'item': td, 
-                                    'usuario': mov_pendente['usuario'], # Nome de quem retirou
-                                    'baixado_por': st.session_state['usuario'], # Quem está logado dando a baixa
-                                    'data_hora': datetime.now().strftime("%d/%m/%Y %H:%M:%S"), 
+                                    'usuario': mov_pendente['usuario'], 
+                                    'baixado_por': st.session_state['usuario'], 
+                                    'data_hora': str_data_hora_dev, 
                                     'imagem_base64': b64
                                 })
                                 st.session_state['foto_dev'] = None
@@ -320,7 +323,6 @@ else:
             with t_ger:
                 st.header("Registros de Auditoria")
                 
-                # ALTERAÇÃO 1: Barra de Pesquisa
                 termo_pesquisa = st.text_input("🔍 Pesquisar em todos os registros (ID, Usuário, Item ou Motivo):")
                 st.write("---")
                 
@@ -349,7 +351,6 @@ else:
                                 tabela_mov.delete_item(Key={'id': mov['id']})
                                 st.rerun()
                                 
-                        # ALTERAÇÃO 1: Edição para o Admin
                         with st.expander(f"✏️ Editar Registro (ID: {mov['id'][:8]}...)"):
                             novo_motivo = st.text_area("Editar Motivo:", value=mov.get('motivo', ''), key=f"edit_m_{mov['id']}")
                             if st.button("Salvar Alteração", key=f"save_{mov['id']}", type="secondary"):
